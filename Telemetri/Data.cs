@@ -1,19 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Telemetri
+﻿namespace Telemetri
 {
     public enum DataTypes
     {
-        eINT,
-        eFLOAT_1,
-        eFLOAT_2,
-        eFLOAT_3,
-        eFLOAT_4,
-        eString
+        eINT,           // 3
+        eFLOAT_1,       // 3 + 1 + 1
+        eFLOAT_2,       // 3 + 1 + 2
+        eFLOAT_3,       // 3 + 1 + 3
+        eCHECKSUM,      // 8
+        eTIME           // 8 -> 08:11:51
     }
 
     public class Data
@@ -22,6 +16,7 @@ namespace Telemetri
         readonly public string unit;
         readonly public string varName;
         readonly public DataTypes type;
+        public string value;
 
         public Data(string name, string unit, string varName, DataTypes type)
         {
@@ -30,5 +25,27 @@ namespace Telemetri
             this.varName = varName;
             this.type = type;
         }
-    }    
+
+        static public int GetDataLength(DataTypes dataType)
+        {
+            switch (dataType)
+            {
+                case DataTypes.eINT:
+                    return 3;
+                case DataTypes.eFLOAT_1:
+                    return 5;
+                case DataTypes.eFLOAT_2:
+                    return 6;
+                case DataTypes.eFLOAT_3:
+                    return 7;
+                case DataTypes.eCHECKSUM:
+                    return 8;
+                case DataTypes.eTIME:
+                    return 8;
+                default:
+                    throw new System.Exception("WRONG DATA FORMAT");
+            }
+        }
+    }
+
 }

@@ -1,23 +1,27 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.IO.Ports;
-using System.Threading;
-using System.Windows.Forms;
-using System.IO;
 using System.Drawing;
-using static Telemetri.Packet;
-using static Telemetri.Data;
+using System.IO.Ports;
+using System.Linq;
+using System.Windows.Forms;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Telemetri
 {
     public partial class MainForm : Form
     {
-        List<string> ports = SerialPort.GetPortNames().ToList();
+        List<string> ports = new List<string>();
+        string receivedPacket = "";
 
         string defaultPath = @"C:\AKS_Telemetri";
         string defaultFullLogFile = @"telemetri_log.txt";
         string defaultTubitakLogFile = @"tubitak_log.txt";
+
+        Color CorruptedPacketColor = Color.Red;
+        Color NullPacketColor = Color.Blue;
+        Color WrongPacketLengthColor = Color.Brown;
+        Color ApprovedPacketColor = Color.Lime;
 
         public MainForm()
         {
@@ -29,30 +33,60 @@ namespace Telemetri
             BaudRate_Combobox.Items.AddRange(new object[] { 9600, 115200 });
             Ports_Combobox.Items.AddRange(ports.ToArray());
 
-            Packet.datas = new List<Data> {
-                new Data("Time", "GMT+3", "time", DataTypes.eString),
-                new Data("Speed", "km/h", "speed", DataTypes.eINT),
-                new Data("Max Temperature", "°C", "temperature", DataTypes.eINT),
-                new Data("Total Voltage", "V", "voltage", DataTypes.eFLOAT_2),
-                new Data("Remaining Energy", "Wh", "remainingEnergy", DataTypes.eFLOAT_2),
-                new Data("State of Charge", "%", "stateOfCharge", DataTypes.eFLOAT_2),
-                new Data("Current", "A", "current", DataTypes.eFLOAT_2)
+            Packet.datas = new Dictionary<Packet.Indexes, Data> {
+                {Packet.Indexes.timeIndex,              new Data("Time",                "GMT+3",    "time",                 DataTypes.eTIME)},
+                {Packet.Indexes.speedIndex,             new Data("Speed",               "km/h",     "speed",                DataTypes.eINT)},
+                {Packet.Indexes.maxTemperatureIndex,    new Data("Max Temperature",     "°C",       "maxTemperature",       DataTypes.eINT)},
+                {Packet.Indexes.totalVoltageIndex,      new Data("Total Voltage",       "V",        "totalVoltage",         DataTypes.eFLOAT_2)},
+                {Packet.Indexes.remainingEnergyIndex,   new Data("Remaining Energy",    "Wh",       "remainingEnergy",      DataTypes.eFLOAT_2)},
+                {Packet.Indexes.stateOfChargeIndex,     new Data("State of Charge",     "%",        "stateOfCharge",        DataTypes.eFLOAT_2)},
+                {Packet.Indexes.currentIndex,           new Data("Current",             "A",        "current",              DataTypes.eFLOAT_2)}
             };
 
-            Packet.variableCount = Packet.datas.Count;
+            Packet.batteryVoltageFormat = DataTypes.eFLOAT_2;
+            Packet.checksumFormat = DataTypes.eCHECKSUM;
+
+            Packet.CalculatePacketLength();
 
             CreateColumns();
             ResizeDataGridViews();
 
             DataGridViewRow row = new DataGridViewRow();
-            for (int i = 0; i < variableCount; i++)
+            for (int i = 0; i < Packet.datas.Count; i++)
             {
                 DataGridViewTextBoxCell cell = new DataGridViewTextBoxCell();
-                cell.Value = i;
+                cell.Value = 0;
                 row.Cells.Add(cell);
             }
             row.Height = 50;
             PacketVariablesDataGridView.Rows.Add(row);
+
+            row = new DataGridViewRow();
+
+            for (int i = 0; i < 10; i++)
+            {
+                DataGridViewTextBoxCell cell = new DataGridViewTextBoxCell();
+                cell.Value = 0;
+                row.Cells.Add(cell);
+            }
+            row.Height = 50;
+            BatteryCellDataGridView0.Rows.Add(row);
+
+            row = new DataGridViewRow();
+
+            for (int i = 0; i < 10; i++)
+            {
+                DataGridViewTextBoxCell cell = new DataGridViewTextBoxCell();
+                cell.Value = 0;
+                row.Cells.Add(cell);
+            }
+            row.Height = 50;
+            BatteryCellDataGridView1.Rows.Add(row);
+
+            Packet_TextBox.AppendText("Null Packet", NullPacketColor);
+            Packet_TextBox.AppendText("Corrupted Packet", CorruptedPacketColor);
+            Packet_TextBox.AppendText("Wrong Packet Length", WrongPacketLengthColor);
+            Packet_TextBox.AppendText("Approved Packet", ApprovedPacketColor);
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -92,7 +126,7 @@ namespace Telemetri
 
         private void ClearData_Button_Click(object sender, EventArgs e)
         {
-            Data_TextBox.Text = "";
+            Packet_TextBox.Text = "";
         }
 
         private void Connect_Button_Click(object sender, EventArgs e)
@@ -130,7 +164,15 @@ namespace Telemetri
 
         private void ActiveSerialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
-            string data = activeSerialPort.ReadLine();
+            receivedPacket = activeSerialPort.ReadLine();
+            receivedPacket = receivedPacket.Replace("\n", "").Replace("\r", "");
+            Thread thread = new Thread(new ThreadStart(PacketHandler));
+
+            thread.Start();
+            Console.WriteLine(receivedPacket);
+            Console.WriteLine("Received Packet Length = " + receivedPacket.Length);
+            Console.WriteLine("Expected Packet Length = " + Packet.packetLength);
+
             /*
             List<string> temp_values = data.Split(',').ToList();
 
@@ -185,6 +227,117 @@ namespace Telemetri
                 }));
             }
             */
+        }
+
+        private void PacketHandler()
+        {
+            if (receivedPacket == null)
+            {
+                if (Packet_TextBox.InvokeRequired)
+                {
+                    Packet_TextBox.Invoke(new MethodInvoker(
+                        delegate
+                        {
+                            Packet_TextBox.AppendText("Null Packet", NullPacketColor);
+                        })
+                    );
+                }
+                Log.Write(Log.Status.eNullPacket);
+                return;
+            }
+            if (receivedPacket.Length != Packet.packetLength)
+            {
+                if (Packet_TextBox.InvokeRequired)
+                {
+                    Packet_TextBox.Invoke(new MethodInvoker(
+                        delegate
+                        {
+                            Packet_TextBox.AppendText(receivedPacket, WrongPacketLengthColor);
+                        })
+                    );
+                }
+                Log.Write(Log.Status.eWrongPacketLength, receivedPacket);
+                return;
+            }
+
+            List<string> elements = receivedPacket.Split(',').ToList();
+
+            ///TODO: Add CRC32 Check
+            if (elements.Count != Packet.GetTotalVariableCount()/* || !CRC32CHECK(elements)*/)       // CRC32 CHECK
+            {
+                if (Packet_TextBox.InvokeRequired)
+                {
+                    Packet_TextBox.Invoke(new MethodInvoker(
+                    delegate
+                    {
+                        Packet_TextBox.AppendText(receivedPacket, CorruptedPacketColor);
+                    }));
+                }
+                return;
+            }
+
+            // Approved
+
+            for (int i = 0; i < Packet.datas.Count; i++)
+            {
+                Packet.datas[(Packet.Indexes)i].value = elements[i];
+            }
+
+            for (int i = 0; i < Packet.batteryCount; i++)
+            {
+                Packet.batteryVoltages[i] = elements[(int)(i + Packet.Indexes.batteryVoltagesStartIndex)];
+            }
+
+            if (Packet_TextBox.InvokeRequired)
+            {
+                Packet_TextBox.Invoke(new MethodInvoker(
+                delegate
+                {
+                    Packet_TextBox.AppendText(receivedPacket, ApprovedPacketColor);
+                }));
+            }
+
+            UpdateValues(elements);
+            Log.Write(Log.Status.eApprovedPacket, receivedPacket);
+        }
+        
+        private void UpdateValues(List<string> values)
+        {
+            for (int i = 0; i < Packet.datas.Count; i++)
+            {
+                if (PacketVariablesDataGridView.InvokeRequired)
+                {
+                    PacketVariablesDataGridView.Invoke(new MethodInvoker(
+                        delegate
+                        {
+                            PacketVariablesDataGridView.Rows[0].Cells[i].Value = values[i].ToString();
+                        })
+                    );
+                }
+            }
+
+            for (int i = 0; i < Packet.batteryCount / 2; i++)
+            {
+                if (BatteryCellDataGridView0.InvokeRequired)
+                {
+                    BatteryCellDataGridView0.Invoke(new MethodInvoker(
+                        delegate
+                        {
+                            BatteryCellDataGridView0.Rows[0].Cells[i].Value = values[i + (Packet.datas.Count)].ToString();
+                        })
+                    );
+                }
+
+                if (BatteryCellDataGridView1.InvokeRequired)
+                {
+                    BatteryCellDataGridView1.Invoke(new MethodInvoker(
+                        delegate
+                        {
+                            BatteryCellDataGridView1.Rows[0].Cells[i].Value = values[i + (Packet.datas.Count) + (Packet.batteryCount / 2)].ToString();
+                        })
+                    );
+                }
+            }
         }
 
         private void Exit_Button_Click(object sender, EventArgs e)
@@ -261,11 +414,11 @@ namespace Telemetri
                 BatteryCellDataGridView1.Columns.Add(column);
             }
 
-            for (int i = 0; i < Packet.variableCount; i++)
+            for (int i = 0; i < Packet.datas.Count; i++)
             {
                 DataGridViewTextBoxColumn column = new DataGridViewTextBoxColumn();
-                column.Name = Packet.datas[i].varName;
-                column.HeaderText = Packet.datas[i].name + " (" + Packet.datas[i].unit + ")";
+                column.Name = Packet.datas[(Packet.Indexes)i].varName;
+                column.HeaderText = Packet.datas[(Packet.Indexes)i].name + " (" + Packet.datas[(Packet.Indexes)i].unit + ")";
                 PacketVariablesDataGridView.Columns.Add(column);
             }
         }
@@ -285,6 +438,17 @@ namespace Telemetri
         Rectangle Top { get { return new Rectangle(0, 0, this.ClientSize.Width, _); } }
         Rectangle Left { get { return new Rectangle(0, 0, _, this.ClientSize.Height); } }
         Rectangle Bottom { get { return new Rectangle(0, this.ClientSize.Height - _, this.ClientSize.Width, _); } }
+
+        private void MainForm_Resize(object sender, EventArgs e)
+        {
+            ResizeDataGridViews();
+        }
+
+        private void Packet_TextBox_TextChanged(object sender, EventArgs e)
+        {
+            Packet_TextBox.SelectionStart = Packet_TextBox.Text.Length;
+            Packet_TextBox.ScrollToCaret();
+        }
 
         Rectangle Right { get { return new Rectangle(this.ClientSize.Width - _, 0, _, this.ClientSize.Height); } }
 
@@ -311,7 +475,7 @@ namespace Telemetri
         {
             base.WndProc(ref message);
 
-            if (message.Msg == 0x84) // WM_NCHITTEST
+            if (message.Msg == 0x84 && WindowState != FormWindowState.Maximized) // WM_NCHITTEST
             {
                 var cursor = this.PointToClient(Cursor.Position);
 
@@ -324,8 +488,6 @@ namespace Telemetri
                 else if (Left.Contains(cursor)) message.Result = (IntPtr)HTLEFT;
                 else if (Right.Contains(cursor)) message.Result = (IntPtr)HTRIGHT;
                 else if (Bottom.Contains(cursor)) message.Result = (IntPtr)HTBOTTOM;
-
-                ResizeDataGridViews();
             }
         }
     }

@@ -1,16 +1,18 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Telemetri
 {
     static class Packet
     {
         public const int batteryCount = 20;
-        static public int variableCount;
-        static public List<Data> datas;
+
+        static public Dictionary<Indexes, Data> datas;
+        static public string[] batteryVoltages = new string[batteryCount];
+        static public DataTypes batteryVoltageFormat;
+        static public string checksum;
+        static public DataTypes checksumFormat;
+        static public int packetLength;
         public enum Indexes
         {
             timeIndex = 0,
@@ -22,17 +24,29 @@ namespace Telemetri
             currentIndex,
             batteryVoltagesStartIndex,
             batteryVoltagesEndIndex = batteryVoltagesStartIndex + batteryCount - 1,
-            checksumIndex
+            checksumIndex = batteryVoltagesEndIndex + 1
         };
 
-        static public string time;
-        static public string speed;
-        static public string maxTemperature;
-        static public string totalVoltage;
-        static public string remainingEnergy;
-        static public string stateOfCharge;
-        static public string current;
-        static public string[] batteryVoltages = new string[batteryCount];
-        static public string checksum;
+
+        static public int GetTotalVariableCount()
+        {
+            return batteryCount + datas.Count + 1;
+        }
+
+        static public void CalculatePacketLength()
+        {
+            Data[] variables = datas.Values.ToArray();
+
+            packetLength = 0;
+
+            for (int i = 0; i < variables.Length; i++)
+            {
+                packetLength += Data.GetDataLength(variables[i].type);
+            }
+
+            packetLength += batteryCount * Data.GetDataLength(batteryVoltageFormat);
+            packetLength += Data.GetDataLength(checksumFormat);
+            packetLength += GetTotalVariableCount() - 1;
+        }
     }
 }
